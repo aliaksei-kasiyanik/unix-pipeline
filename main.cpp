@@ -1,7 +1,6 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/wait.h>
 #include <string.h>
 
 const char *DELIMITER = "|";
@@ -48,18 +47,44 @@ int parsePipeArgs(int argc, char **argv, int pipeProcessCount, char ***PP_ARGS) 
     return exitCode;
 }
 
-int spawnProcess(int in, int out, char **args) {
+int spawnProcess(int i, int pipefds[][2], int pCount, char **args) {
     pid_t pid = fork();
     if (pid == 0) {
-        if (in != 0) {
-            dup2(in, 0);
-            close(in);
+        for (int j = 0; j < i - 1; ++j) {
+            if (close(pipefds[j][0]) < 0 ||
+                close(pipefds[j][1]) < 0) {
+                fprintf(stderr, "ERR: Close\n");
+                return 1;
+            }
         }
-        if (out != 1) {
-            dup2(out, 1);
-            close(out);
+
+        if (i != pCount - 1) {
+            if (dup2(pipefds[i][1], 1) < 0) {
+                fprintf(stderr, "ERR: dup2\n");
+                return 1;
+            }
+            if (close(pipefds[i][0]) < 0) {
+                fprintf(stderr, "ERR: close\n");
+                return 1;
+            }
         }
-        execvp(args[0], args);
+
+        if (i != 0) {
+            if (dup2(pipefds[i - 1][0], 0) < 0) {
+                fprintf(stderr, "ERR: dup2\n");
+                return 1;
+            }
+            if (close(pipefds[i - 1][1]) < 0) {
+                fprintf(stderr, "ERR: close\n");
+                return 1;
+            }
+        }
+
+
+        if (execvp(args[0], args) == -1) {
+            fprintf(stderr, "ERR: Wrong command: %s \n", args[0]);
+            return 1;
+        }
     }
     return pid;
 }
@@ -68,7 +93,7 @@ int spawnProcess(int in, int out, char **args) {
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "ERR: Pass arguments, please\n");
-        return 1;
+        return 2;
     }
 
     int pCount = countPipeProcesses(argc, argv);
@@ -77,39 +102,41 @@ int main(int argc, char *argv[]) {
     int parseCode = parsePipeArgs(argc, argv, pCount, PP_ARGS);
     if (parseCode == 1) {
         fprintf(stderr, "ERR: Invalid arguments\n");
-        return 1;
+        return 2;
     }
 
     pid_t children[pCount - 1];
-    int in, fd[2];
+    int pipefds[pCount - 1][2];
 
-    /* The first process should get its input from the original file descriptor 0.  */
-    in = 0;
+    for (int i = 0; i < pCount; ++i) {
 
-    /* Note the loop bound, we spawn here all, but the last stage of the pipeline.  */
-    int i;
-    for (i = 0; i < pCount - 1; ++i) {
-        pipe(fd);
+        if (pipe(pipefds[i]) == -1) {
+            fprintf(stderr, "ERR: Pipe\n");
+            return 1;
+        }
 
-        /* f [1] is the write end of the pipe, we carry `in` from the prev iteration.  */
-        children[i] = spawnProcess(in, fd[1], PP_ARGS[i]);
+        pid_t pid = spawnProcess(i, pipefds, pCount, PP_ARGS[i]);
 
-        /* No need for the write end of the pipe, the child will write here.  */
-        close(fd[1]);
-
-        /* Keep the read end of the pipe, the next child will read from there.  */
-        in = fd[0];
+        if (pid > 0) {
+            children[i] = pid;
+        } else {
+            fprintf(stderr, "ERR: Fork\n");
+            return 1;
+        }
     }
 
-    /* Last stage of the pipeline - set stdin be the read end of the previous pipe
-       and output to the original file descriptor 1. */
-    if (in != 0) {
-        dup2(in, 0);
+    for (int i = 0; i < pCount - 1; ++i) {
+        if (close(pipefds[i][0]) < 0 ||
+            close(pipefds[i][1]) < 0) {
+            fprintf(stderr, "ERR: Close\n");
+            return 1;
+        }
+
     }
 
     int exitCode = 0;
     int status;
-    for (int j = 0; j < pCount - 1; ++j) {
+    for (int j = 0; j < pCount; ++j) {
         waitpid(children[j], &status, 0);
         if (WIFEXITED(status)) {
             if (WEXITSTATUS(status) != 0) {
@@ -117,12 +144,13 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-    if (exitCode == 1) {
-        return exitCode;
-    }
 
-    /* Execute the last stage with the current process. */
-    return execvp(PP_ARGS[i][0], PP_ARGS[i]);
+    for (int i = 0; i < pCount; ++i) {
+        delete[] PP_ARGS[i];
+    }
+    delete[] PP_ARGS;
+
+    return exitCode;
 }
 
 
