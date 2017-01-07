@@ -56,36 +56,36 @@ int spawnProcess(int i, int pipefds[][2], int pCount, char **args) {
             if (close(pipefds[j][0]) < 0 ||
                 close(pipefds[j][1]) < 0) {
                 fprintf(stderr, "ERR: Close\n");
-                return 1;
+                return -1;
             }
         }
 
         if (i != pCount - 1) {
             if (dup2(pipefds[i][1], 1) < 0) {
                 fprintf(stderr, "ERR: dup2\n");
-                return 1;
+                return -1;
             }
             if (close(pipefds[i][0]) < 0) {
                 fprintf(stderr, "ERR: close\n");
-                return 1;
+                return -1;
             }
         }
 
         if (i != 0) {
             if (dup2(pipefds[i - 1][0], 0) < 0) {
                 fprintf(stderr, "ERR: dup2\n");
-                return 1;
+                return -1;
             }
             if (close(pipefds[i - 1][1]) < 0) {
                 fprintf(stderr, "ERR: close\n");
-                return 1;
+                return -1;
             }
         }
 
 
         if (execvp(args[0], args) == -1) {
             fprintf(stderr, "ERR: Wrong command: %s \n", args[0]);
-            return 1;
+            return -1;
         }
     }
     return pid;
@@ -107,7 +107,7 @@ int main(int argc, char *argv[]) {
         return 2;
     }
 
-    pid_t children[pCount - 1];
+    pid_t children[pCount];
     int pipefds[pCount - 1][2];
 
     for (int i = 0; i < pCount; ++i) {
@@ -122,7 +122,6 @@ int main(int argc, char *argv[]) {
         if (pid > 0) {
             children[i] = pid;
         } else {
-            fprintf(stderr, "ERR: Fork\n");
             return 1;
         }
     }
